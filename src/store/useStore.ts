@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { AppState, Material, Product, Purchase, Sale } from './types';
+import { AppState, Material, Product, Purchase, Sale, SalePeriod } from './types';
 import { seedMaterials, seedProducts } from '../data/seed';
 import { generateId, getWeekDates } from '../utils/date';
 import { calculateSaleItem, calculateTotalMaterialConsumption } from '../utils/calculator';
@@ -50,6 +50,13 @@ export const useStore = create<AppState>()(
         set((state) => ({
           materials: state.materials.map((m) =>
             m.id === id ? { ...m, stock } : m
+          ),
+        })),
+
+      updateMaterialSafeStock: (id, safeStock) =>
+        set((state) => ({
+          materials: state.materials.map((m) =>
+            m.id === id ? { ...m, safeStock } : m
           ),
         })),
 
@@ -192,7 +199,7 @@ export const useStore = create<AppState>()(
 
       getPurchasesByDate: (date) => get().purchases.filter(p => p.date === date),
 
-      getSaleByDate: (date) => get().sales.find(s => s.date === date),
+      getSalesByDate: (date) => get().sales.filter(s => s.date === date),
 
       getLowStockMaterials: () =>
         get().materials.filter(m => m.stock <= m.safeStock),
