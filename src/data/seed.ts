@@ -9,7 +9,7 @@ export const seedMaterials: Material[] = [
     stock: 20,
     safeStock: 5,
     emoji: '🌾',
-    priceHistory: [{ date: '2026-06-01', price: 3.5 }],
+    priceHistory: [{ date: '2026-06-01', price: 3.5, source: 'manual' }],
   },
   {
     id: 'mat-2',
@@ -19,7 +19,7 @@ export const seedMaterials: Material[] = [
     stock: 5,
     safeStock: 2,
     emoji: '🫒',
-    priceHistory: [{ date: '2026-06-01', price: 12 }],
+    priceHistory: [{ date: '2026-06-01', price: 12, source: 'manual' }],
   },
   {
     id: 'mat-3',
@@ -29,7 +29,7 @@ export const seedMaterials: Material[] = [
     stock: 10,
     safeStock: 3,
     emoji: '🫘',
-    priceHistory: [{ date: '2026-06-01', price: 5 }],
+    priceHistory: [{ date: '2026-06-01', price: 5, source: 'manual' }],
   },
   {
     id: 'mat-4',
@@ -39,7 +39,7 @@ export const seedMaterials: Material[] = [
     stock: 50,
     safeStock: 20,
     emoji: '🥚',
-    priceHistory: [{ date: '2026-06-01', price: 0.8 }],
+    priceHistory: [{ date: '2026-06-01', price: 0.8, source: 'manual' }],
   },
   {
     id: 'mat-5',
@@ -49,7 +49,7 @@ export const seedMaterials: Material[] = [
     stock: 3,
     safeStock: 1,
     emoji: '🧅',
-    priceHistory: [{ date: '2026-06-01', price: 6 }],
+    priceHistory: [{ date: '2026-06-01', price: 6, source: 'manual' }],
   },
   {
     id: 'mat-6',
@@ -59,7 +59,7 @@ export const seedMaterials: Material[] = [
     stock: 8,
     safeStock: 2,
     emoji: '🥩',
-    priceHistory: [{ date: '2026-06-01', price: 25 }],
+    priceHistory: [{ date: '2026-06-01', price: 25, source: 'manual' }],
   },
 ];
 

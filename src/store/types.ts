@@ -3,6 +3,8 @@ export interface RecipeItem {
   quantity: number;
 }
 
+export type PriceHistorySource = 'purchase' | 'manual';
+
 export interface Material {
   id: string;
   name: string;
@@ -14,6 +16,7 @@ export interface Material {
   priceHistory: {
     date: string;
     price: number;
+    source: PriceHistorySource;
   }[];
 }
 

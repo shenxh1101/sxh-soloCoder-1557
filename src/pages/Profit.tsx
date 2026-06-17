@@ -2,8 +2,8 @@ import { useMemo, useState } from 'react';
 import { useStore } from '../store';
 import { SALE_PERIOD_LABELS, SalePeriod } from '../store/types';
 import { calculateProductProfit } from '../utils/calculator';
-import { getToday, getWeekDates, getWeekDayName } from '../utils/date';
-import { Calendar, TrendingUp, TrendingDown, Award, BarChart3, PackageSearch } from 'lucide-react';
+import { getToday, getRecentDates, getDateRange, getWeekDayName } from '../utils/date';
+import { Calendar, TrendingUp, TrendingDown, Award, BarChart3, PackageSearch, ChevronDown, ChevronUp, AlertCircle, Sparkles, Activity } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
   LineChart, Line, Legend, AreaChart, Area,
@@ -14,11 +14,18 @@ const PERIOD_EMOJI: Record<SalePeriod, string> = { morning: '🌅', noon: '☀�
 const barColors = ['#FF8C42', '#FFB74D', '#FFD180', '#FFE0B2', '#FFECB3', '#FFF8E1'];
 
 type ViewMode = 'day' | 'week' | 'product';
+type TimeRangeMode = '7d' | '30d' | 'custom';
 
 export default function Profit() {
   const [viewMode, setViewMode] = useState<ViewMode>('day');
   const [selectedDate, setSelectedDate] = useState(getToday());
   const [selectedProductId, setSelectedProductId] = useState<string>('');
+
+  const [timeRangeMode, setTimeRangeMode] = useState<TimeRangeMode>('7d');
+  const [customStart, setCustomStart] = useState(getRecentDates(7)[0]);
+  const [customEnd, setCustomEnd] = useState(getToday());
+
+  const [expandedPeriods, setExpandedPeriods] = useState<Set<string>>(new Set());
 
   const materials = useStore(state => state.materials);
   const products = useStore(state => state.products);
@@ -75,7 +82,7 @@ export default function Profit() {
   }, [products, materials, mergedDayData]);
 
   const weekData = useMemo(() => {
-    const weekDates = getWeekDates();
+    const weekDates = getRecentDates(7);
     return weekDates.map(date => {
       const ds = sales.filter(s => s.date === date);
       const revenue = ds.reduce((sum, s) => sum + s.totalRevenue, 0);
@@ -91,44 +98,67 @@ export default function Profit() {
     profit: weekData.reduce((s, d) => s + d.profit, 0),
   }), [weekData]);
 
+  const productRangeDates = useMemo(() => {
+    if (timeRangeMode === '7d') return getRecentDates(7);
+    if (timeRangeMode === '30d') return getRecentDates(30);
+    return getDateRange(customStart, customEnd);
+  }, [timeRangeMode, customStart, customEnd]);
+
   const productTrendData = useMemo(() => {
     const pid = selectedProductId || products[0]?.id;
     if (!pid) return [];
-    const sorted = [...sales].sort((a, b) => a.date.localeCompare(b.date));
+    const dateSet = new Set(productRangeDates);
+    const sorted = [...sales].filter(s => dateSet.has(s.date)).sort((a, b) => a.date.localeCompare(b.date));
     const dateMap = new Map<string, { quantity: number; revenue: number; cost: number; profit: number }>();
+    productRangeDates.forEach(d => dateMap.set(d, { quantity: 0, revenue: 0, cost: 0, profit: 0 }));
     sorted.forEach(sale => {
       const item = sale.items.find(i => i.productId === pid);
-      if (!item || item.quantity === 0) return;
+      if (!item) return;
       const existing = dateMap.get(sale.date);
       if (existing) {
         existing.quantity += item.quantity;
         existing.revenue += item.revenue;
         existing.cost += item.cost;
         existing.profit += item.profit;
-      } else {
-        dateMap.set(sale.date, { quantity: item.quantity, revenue: item.revenue, cost: item.cost, profit: item.profit });
       }
     });
-    return Array.from(dateMap.entries()).map(([date, data]) => ({ date, ...data }));
-  }, [sales, selectedProductId, products]);
+    return Array.from(dateMap.entries()).map(([date, data]) => ({ date, ...data, weekday: getWeekDayName(date) }));
+  }, [sales, selectedProductId, products, productRangeDates]);
+
+  const productVolatilityDays = useMemo(() => {
+    if (productTrendData.length < 3) return [];
+    const withChange = productTrendData
+      .filter(d => d.quantity > 0)
+      .map((d, idx, arr) => {
+        const prev = idx > 0 ? arr[idx - 1].profit : 0;
+        const change = prev > 0 ? ((d.profit - prev) / prev) * 100 : 0;
+        return { ...d, change: Math.abs(change) };
+      });
+    return withChange
+      .sort((a, b) => b.change - a.change)
+      .slice(0, 3)
+      .filter(d => d.change > 0);
+  }, [productTrendData]);
 
   const productSummary = useMemo(() => {
     return products.map(product => {
-      const totalQuantity = sales.reduce((sum, sale) => {
+      const rangeSet = new Set(productRangeDates);
+      const rangeSales = sales.filter(s => rangeSet.has(s.date));
+      const totalQuantity = rangeSales.reduce((sum, sale) => {
         const item = sale.items.find(i => i.productId === product.id);
         return sum + (item?.quantity || 0);
       }, 0);
-      const totalRevenue = sales.reduce((sum, sale) => {
+      const totalRevenue = rangeSales.reduce((sum, sale) => {
         const item = sale.items.find(i => i.productId === product.id);
         return sum + (item?.revenue || 0);
       }, 0);
-      const totalCost = sales.reduce((sum, sale) => {
+      const totalCost = rangeSales.reduce((sum, sale) => {
         const item = sale.items.find(i => i.productId === product.id);
         return sum + (item?.cost || 0);
       }, 0);
       const totalProfit = totalRevenue - totalCost;
       const avgProfitMargin = totalRevenue > 0 ? (totalProfit / totalRevenue * 100) : 0;
-      const daysWithData = new Set(sales.filter(s => s.items.some(i => i.productId === product.id && i.quantity > 0)).map(s => s.date)).size;
+      const daysWithData = new Set(rangeSales.filter(s => s.items.some(i => i.productId === product.id && i.quantity > 0)).map(s => s.date)).size;
       return {
         ...product,
         totalQuantity, totalRevenue, totalCost, totalProfit, avgProfitMargin, daysWithData,
@@ -136,11 +166,20 @@ export default function Profit() {
         unitProfit: totalQuantity > 0 ? totalProfit / totalQuantity : calculateProductProfit(product, materials).profit,
       };
     }).sort((a, b) => b.totalProfit - a.totalProfit);
-  }, [products, sales, materials]);
+  }, [products, sales, productRangeDates, materials]);
 
   const chartData = dayProductProfits.filter(p => p.soldQuantity > 0).map(p => ({
     name: p.name, profit: p.totalProfit, revenue: p.totalRevenue, emoji: p.emoji,
   }));
+
+  const togglePeriod = (periodId: string) => {
+    setExpandedPeriods(prev => {
+      const next = new Set(prev);
+      if (next.has(periodId)) next.delete(periodId);
+      else next.add(periodId);
+      return next;
+    });
+  };
 
   return (
     <div className="p-8 space-y-6">
@@ -149,7 +188,7 @@ export default function Profit() {
           <h2 className="text-2xl font-serif font-bold text-brown-500">利润分析</h2>
           <p className="text-brown-400">多维度分析经营利润</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <div className="flex bg-warm-100 rounded-xl p-1">
             {([['day', '按日'], ['week', '按周'], ['product', '按产品']] as [ViewMode, string][]).map(([mode, label]) => (
               <button
@@ -232,19 +271,59 @@ export default function Profit() {
                   )}
                 </div>
                 <div className="space-y-4">
-                  {daySales.sort((a, b) => PERIOD_ORDER.indexOf(a.period) - PERIOD_ORDER.indexOf(b.period)).map(sale => (
-                    <div key={sale.id} className="card animate-fadeInUp bg-gradient-to-br from-warm-50 to-white">
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className="text-xl">{PERIOD_EMOJI[sale.period]}</span>
-                        <h4 className="font-bold text-brown-500">{SALE_PERIOD_LABELS[sale.period]}</h4>
+                  {daySales.sort((a, b) => PERIOD_ORDER.indexOf(a.period) - PERIOD_ORDER.indexOf(b.period)).map(sale => {
+                    const isExpanded = expandedPeriods.has(sale.id);
+                    return (
+                      <div key={sale.id} className="card animate-fadeInUp bg-gradient-to-br from-warm-50 to-white overflow-hidden">
+                        <button
+                          onClick={() => togglePeriod(sale.id)}
+                          className="w-full text-left p-4 flex items-center justify-between hover:bg-warm-100/50 transition-colors"
+                        >
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="text-xl">{PERIOD_EMOJI[sale.period]}</span>
+                              <h4 className="font-bold text-brown-500">{SALE_PERIOD_LABELS[sale.period]}</h4>
+                              {isExpanded ? <ChevronUp className="w-4 h-4 text-brown-400 ml-2" /> : <ChevronDown className="w-4 h-4 text-brown-400 ml-2" />}
+                            </div>
+                            <div className="grid grid-cols-3 gap-2 text-center">
+                              <div><p className="text-xs text-brown-400">收入</p><p className="font-bold text-green-600 text-sm">¥{sale.totalRevenue.toFixed(2)}</p></div>
+                              <div><p className="text-xs text-brown-400">成本</p><p className="font-bold text-orange-600 text-sm">¥{sale.totalCost.toFixed(2)}</p></div>
+                              <div><p className="text-xs text-brown-400">利润</p><p className="font-bold text-primary-600 text-sm">¥{sale.grossProfit.toFixed(2)}</p></div>
+                            </div>
+                          </div>
+                        </button>
+                        {isExpanded && (
+                          <div className="border-t border-warm-200 bg-white/60 px-4 pb-4">
+                            <table className="w-full mt-3">
+                              <thead>
+                                <tr className="border-b border-warm-200 text-xs text-brown-400">
+                                  <th className="text-left py-2">产品</th>
+                                  <th className="text-right py-2">销量</th>
+                                  <th className="text-right py-2">收入</th>
+                                  <th className="text-right py-2">成本</th>
+                                  <th className="text-right py-2">利润</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {sale.items.filter(i => i.quantity > 0).map(item => {
+                                  const product = products.find(p => p.id === item.productId);
+                                  return (
+                                    <tr key={item.productId} className="border-b border-warm-100 last:border-0 text-sm">
+                                      <td className="py-2"><span className="flex items-center gap-1"><span>{product?.emoji}</span><span className="text-brown-500 font-medium">{product?.name}</span></span></td>
+                                      <td className="py-2 text-right text-brown-500">{item.quantity}份</td>
+                                      <td className="py-2 text-right text-green-600">¥{item.revenue.toFixed(2)}</td>
+                                      <td className="py-2 text-right text-orange-600">¥{item.cost.toFixed(2)}</td>
+                                      <td className="py-2 text-right font-bold text-primary-600">¥{item.profit.toFixed(2)}</td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
                       </div>
-                      <div className="grid grid-cols-3 gap-2 text-center">
-                        <div><p className="text-xs text-brown-400">收入</p><p className="font-bold text-green-600 text-sm">¥{sale.totalRevenue.toFixed(2)}</p></div>
-                        <div><p className="text-xs text-brown-400">成本</p><p className="font-bold text-orange-600 text-sm">¥{sale.totalCost.toFixed(2)}</p></div>
-                        <div><p className="text-xs text-brown-400">利润</p><p className="font-bold text-primary-600 text-sm">¥{sale.grossProfit.toFixed(2)}</p></div>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
@@ -389,9 +468,33 @@ export default function Profit() {
       {viewMode === 'product' && (
         <>
           <div className="card animate-fadeInUp">
-            <div className="flex items-center gap-2 mb-4">
-              <PackageSearch className="w-5 h-5 text-primary-500" />
-              <h3 className="text-lg font-bold text-brown-500">选择产品查看趋势</h3>
+            <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+              <div className="flex items-center gap-2">
+                <PackageSearch className="w-5 h-5 text-primary-500" />
+                <h3 className="text-lg font-bold text-brown-500">选择产品查看趋势</h3>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex bg-warm-100 rounded-lg p-1">
+                  {([['7d', '最近7天'], ['30d', '最近30天'], ['custom', '自定义']] as [TimeRangeMode, string][]).map(([mode, label]) => (
+                    <button
+                      key={mode}
+                      onClick={() => setTimeRangeMode(mode)}
+                      className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                        timeRangeMode === mode ? 'bg-white text-primary-600 shadow-sm' : 'text-brown-400 hover:text-brown-500'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {timeRangeMode === 'custom' && (
+                  <div className="flex items-center gap-1 text-xs">
+                    <input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} className="border border-warm-200 rounded-lg px-2 py-1.5 text-brown-500 outline-none focus:border-primary-400" />
+                    <span className="text-brown-400">至</span>
+                    <input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} className="border border-warm-200 rounded-lg px-2 py-1.5 text-brown-500 outline-none focus:border-primary-400" />
+                  </div>
+                )}
+              </div>
             </div>
             <div className="flex flex-wrap gap-2">
               {products.map(product => (
@@ -414,27 +517,61 @@ export default function Profit() {
             <div className="card animate-fadeInUp">
               <h3 className="text-lg font-bold text-brown-500 mb-4">
                 {products.find(p => p.id === (selectedProductId || products[0]?.id))?.emoji}{' '}
-                {products.find(p => p.id === (selectedProductId || products[0]?.id))?.name} 销量与利润趋势
+                {products.find(p => p.id === (selectedProductId || products[0]?.id))?.name} 经营趋势
               </h3>
-              <div className="h-80">
+              <div className="h-96">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={productTrendData}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#FFE8CC" />
-                    <XAxis dataKey="date" stroke="#8D6E63" />
-                    <YAxis yAxisId="left" stroke="#8D6E63" />
-                    <YAxis yAxisId="right" orientation="right" stroke="#FF8C42" />
-                    <Tooltip contentStyle={{ backgroundColor: '#FFF7F0', border: '2px solid #FFB784', borderRadius: '12px' }} />
+                    <XAxis dataKey="date" stroke="#8D6E63" fontSize={11} />
+                    <YAxis yAxisId="left" stroke="#8D6E63" fontSize={11} />
+                    <YAxis yAxisId="right" orientation="right" stroke="#8D6E63" fontSize={11} />
+                    <Tooltip contentStyle={{ backgroundColor: '#FFF7F0', border: '2px solid #FFB784', borderRadius: '12px' }} formatter={(value: number, name: string) => {
+                      if (name === '销量') return [`${value} 份`, name];
+                      return [`¥${value.toFixed(2)}`, name];
+                    }} />
                     <Legend />
-                    <Line yAxisId="left" type="monotone" dataKey="quantity" name="销量(份)" stroke="#4CAF50" strokeWidth={2} dot={{ r: 4 }} />
-                    <Line yAxisId="right" type="monotone" dataKey="profit" name="利润(元)" stroke="#FF8C42" strokeWidth={2} dot={{ r: 4 }} />
+                    <Line yAxisId="right" type="monotone" dataKey="quantity" name="销量" stroke="#4CAF50" strokeWidth={2} dot={{ r: 4 }} />
+                    <Line yAxisId="left" type="monotone" dataKey="revenue" name="收入" stroke="#2196F3" strokeWidth={2} dot={{ r: 4 }} />
+                    <Line yAxisId="left" type="monotone" dataKey="cost" name="成本" stroke="#FF9800" strokeWidth={2} dot={{ r: 4 }} strokeDasharray="3 3" />
+                    <Line yAxisId="left" type="monotone" dataKey="profit" name="利润" stroke="#FF8C42" strokeWidth={2.5} dot={{ r: 5, strokeWidth: 2 }} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
             </div>
           )}
 
+          {productVolatilityDays.length > 0 && (
+            <div className="card animate-fadeInUp bg-gradient-to-r from-yellow-50 to-orange-50 border-yellow-200">
+              <div className="flex items-center gap-2 mb-3">
+                <Activity className="w-5 h-5 text-yellow-600" />
+                <h3 className="text-lg font-bold text-yellow-800">📈 波动最大日期</h3>
+                <span className="text-xs text-yellow-600 bg-yellow-100 px-2 py-0.5 rounded-full">相对前日利润变动幅度</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {productVolatilityDays.map((day, idx) => (
+                  <div key={day.date} className="bg-white rounded-xl p-4 border border-yellow-200">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs text-brown-400">#{idx + 1} {day.weekday}</span>
+                      <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${day.change >= 50 ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                        {day.change.toFixed(0)}% 波动
+                      </span>
+                    </div>
+                    <p className="font-bold text-brown-600 text-lg">{day.date}</p>
+                    <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                      <div><span className="text-brown-400">销量:</span> <span className="font-medium text-brown-600">{day.quantity}份</span></div>
+                      <div><span className="text-brown-400">利润:</span> <span className="font-medium text-primary-600">¥{day.profit.toFixed(2)}</span></div>
+                      <div><span className="text-brown-400">收入:</span> <span className="font-medium text-green-600">¥{day.revenue.toFixed(2)}</span></div>
+                      <div><span className="text-brown-400">成本:</span> <span className="font-medium text-orange-600">¥{day.cost.toFixed(2)}</span></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="card animate-fadeInUp">
-            <h3 className="text-lg font-bold text-brown-500 mb-4">全部产品经营对比</h3>
+            <h3 className="text-lg font-bold text-brown-500 mb-4">全部产品经营对比 ({timeRangeMode === '7d' ? '最近7天' : timeRangeMode === '30d' ? '最近30天' : `${customStart} ~ ${customEnd}`})</h3>
             <div className="h-80">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={productSummary.map(p => ({ name: p.name, emoji: p.emoji, revenue: p.totalRevenue, cost: p.totalCost, profit: p.totalProfit }))}>

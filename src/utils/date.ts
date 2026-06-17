@@ -24,6 +24,29 @@ export const getWeekDates = (): string[] => {
   return dates;
 };
 
+export const getRecentDates = (days: number): string[] => {
+  const dates: string[] = [];
+  const today = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const date = new Date(today);
+    date.setDate(today.getDate() - i);
+    dates.push(formatDate(date));
+  }
+  return dates;
+};
+
+export const getDateRange = (startDate: string, endDate: string): string[] => {
+  const dates: string[] = [];
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  const current = new Date(start);
+  while (current <= end) {
+    dates.push(formatDate(current));
+    current.setDate(current.getDate() + 1);
+  }
+  return dates;
+};
+
 export const getWeekDayName = (dateStr: string): string => {
   const days = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
   const date = new Date(dateStr);

@@ -28,7 +28,7 @@ export const useStore = create<AppState>()(
             {
               ...material,
               id: generateId(),
-              priceHistory: [{ date: new Date().toISOString().split('T')[0], price: material.currentPrice }],
+              priceHistory: [{ date: new Date().toISOString().split('T')[0], price: material.currentPrice, source: 'manual' }],
             },
           ],
         })),
@@ -37,7 +37,7 @@ export const useStore = create<AppState>()(
         set((state) => ({
           materials: state.materials.map((m) => {
             if (m.id !== id) return m;
-            const newHistory = sortPriceHistory([...m.priceHistory, { date, price: newPrice }]);
+            const newHistory = sortPriceHistory([...m.priceHistory, { date, price: newPrice, source: 'manual' }]);
             return {
               ...m,
               currentPrice: getLatestPrice(newHistory),
@@ -85,7 +85,7 @@ export const useStore = create<AppState>()(
           const newStock = material.stock + purchase.quantity;
           const newHistory = sortPriceHistory([
             ...material.priceHistory,
-            { date: purchase.date, price: purchase.unitPrice },
+            { date: purchase.date, price: purchase.unitPrice, source: 'purchase' },
           ]);
           const newCurrentPrice = getLatestPrice(newHistory);
 
@@ -112,7 +112,7 @@ export const useStore = create<AppState>()(
 
           const newHistory = [...material.priceHistory];
           const entryIndex = newHistory.findIndex(
-            entry => entry.date === purchase.date && entry.price === purchase.unitPrice
+            entry => entry.date === purchase.date && entry.price === purchase.unitPrice && entry.source === 'purchase'
           );
           if (entryIndex !== -1) {
             newHistory.splice(entryIndex, 1);

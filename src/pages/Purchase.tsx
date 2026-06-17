@@ -3,6 +3,17 @@ import { useStore } from '../store';
 import { getToday } from '../utils/date';
 import { Plus, Trash2, Calendar, TrendingUp } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import type { PriceHistorySource } from '../store/types';
+
+const sourceLabel: Record<PriceHistorySource, string> = {
+  purchase: '采购录入',
+  manual: '手动改价',
+};
+
+const sourceBadge: Record<PriceHistorySource, string> = {
+  purchase: 'bg-blue-100 text-blue-700',
+  manual: 'bg-orange-100 text-orange-700',
+};
 
 export default function Purchase() {
   const today = getToday();
@@ -49,18 +60,22 @@ export default function Purchase() {
     if (!material) return [];
     return [...material.priceHistory]
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-      .map(entry => ({ date: entry.date, price: entry.price }));
+      .map(entry => ({
+        date: entry.date,
+        purchasePrice: entry.source === 'purchase' ? entry.price : null,
+        manualPrice: entry.source === 'manual' ? entry.price : null,
+        allPrice: entry.price,
+        source: entry.source,
+      }));
   }, [priceChartMaterial, materials]);
 
-  const purchasePriceChartData = useMemo(() => {
+  const priceHistoryDetail = useMemo(() => {
     if (!priceChartMaterial) return [];
     const material = materials.find(m => m.id === priceChartMaterial);
     if (!material) return [];
-    const materialPurchases = purchases
-      .filter(p => p.materialId === priceChartMaterial)
+    return [...material.priceHistory]
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-    return materialPurchases.map(p => ({ date: p.date, price: p.unitPrice, quantity: p.quantity }));
-  }, [priceChartMaterial, purchases, materials]);
+  }, [priceChartMaterial, materials]);
 
   const chartMaterial = materials.find(m => m.id === priceChartMaterial);
 
@@ -201,17 +216,37 @@ export default function Purchase() {
         {priceChartMaterial && chartMaterial ? (
           <div>
             {priceChartData.length >= 2 ? (
-              <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={priceChartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#FFE8CC" />
-                    <XAxis dataKey="date" stroke="#8D6E63" fontSize={12} />
-                    <YAxis stroke="#8D6E63" fontSize={12} domain={['auto', 'auto']} />
-                    <Tooltip formatter={(value: number) => [`¥${value.toFixed(2)}`, '进价']} contentStyle={{ backgroundColor: '#FFF7F0', border: '2px solid #FFB784', borderRadius: '12px' }} />
-                    <Legend />
-                    <Line type="monotone" dataKey="price" name={`${chartMaterial.name}进价`} stroke="#FF8C42" strokeWidth={2} dot={{ r: 4, fill: '#FF8C42' }} />
-                  </LineChart>
-                </ResponsiveContainer>
+              <div>
+                <div className="h-64">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={priceChartData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#FFE8CC" />
+                      <XAxis dataKey="date" stroke="#8D6E63" fontSize={12} />
+                      <YAxis stroke="#8D6E63" fontSize={12} domain={['auto', 'auto']} />
+                      <Tooltip
+                        formatter={(value: number | null, name: string) => {
+                          if (value === null) return ['-', name];
+                          const label = name === 'purchasePrice' ? '采购录入价' : name === 'manualPrice' ? '手动改价' : '进价';
+                          return [`¥${value.toFixed(2)}`, label];
+                        }}
+                        contentStyle={{ backgroundColor: '#FFF7F0', border: '2px solid #FFB784', borderRadius: '12px' }}
+                      />
+                      <Legend formatter={(value: string) => {
+                        if (value === 'purchasePrice') return '采购录入 (实心蓝)';
+                        if (value === 'manualPrice') return '手动改价 (空心橙)';
+                        return value;
+                      }} />
+                      <Line type="monotone" dataKey="allPrice" name="价格走势" stroke="#FF8C42" strokeWidth={2} dot={false} strokeDasharray="4 4" opacity={0.4} />
+                      <Line type="monotone" dataKey="purchasePrice" name="purchasePrice" stroke="#3B82F6" strokeWidth={0} dot={{ r: 5, fill: '#3B82F6', strokeWidth: 2, stroke: '#fff' }} connectNulls={false} />
+                      <Line type="monotone" dataKey="manualPrice" name="manualPrice" stroke="#F97316" strokeWidth={0} dot={{ r: 6, fill: '#fff', strokeWidth: 3, stroke: '#F97316' }} connectNulls={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="flex flex-wrap gap-4 mt-3 justify-center text-sm text-brown-500">
+                  <div className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-full bg-blue-500"></span>采购录入</div>
+                  <div className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-full bg-white border-2 border-orange-500"></span>手动改价</div>
+                  <div className="flex items-center gap-1.5"><span className="inline-block w-6 border-t-2 border-dashed border-primary-400"></span>价格趋势</div>
+                </div>
               </div>
             ) : (
               <div className="text-center py-8 text-brown-400">
@@ -219,28 +254,49 @@ export default function Purchase() {
               </div>
             )}
 
-            {purchasePriceChartData.length > 0 && (
-              <div className="mt-4">
-                <h4 className="font-medium text-brown-500 mb-3">采购价记录明细</h4>
+            {priceHistoryDetail.length > 0 && (
+              <div className="mt-6">
+                <h4 className="font-medium text-brown-500 mb-3">价格历史明细（按日期排序）</h4>
                 <div className="overflow-x-auto">
                   <table className="w-full">
                     <thead>
                       <tr className="border-b-2 border-warm-200">
                         <th className="text-left py-2 px-3 text-brown-400 font-medium text-sm">日期</th>
-                        <th className="text-right py-2 px-3 text-brown-400 font-medium text-sm">采购价</th>
-                        <th className="text-right py-2 px-3 text-brown-400 font-medium text-sm">采购量</th>
-                        <th className="text-right py-2 px-3 text-brown-400 font-medium text-sm">金额</th>
+                        <th className="text-left py-2 px-3 text-brown-400 font-medium text-sm">来源</th>
+                        <th className="text-right py-2 px-3 text-brown-400 font-medium text-sm">单价</th>
+                        <th className="text-right py-2 px-3 text-brown-400 font-medium text-sm">变动</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {purchasePriceChartData.map((record, i) => (
-                        <tr key={i} className="border-b border-warm-100 hover:bg-warm-50 text-sm">
-                          <td className="py-2 px-3 text-brown-500">{record.date}</td>
-                          <td className="py-2 px-3 text-right text-primary-600 font-medium">¥{record.price.toFixed(2)}</td>
-                          <td className="py-2 px-3 text-right text-brown-500">{record.quantity} {chartMaterial.unit}</td>
-                          <td className="py-2 px-3 text-right text-brown-500">¥{(record.price * record.quantity).toFixed(2)}</td>
-                        </tr>
-                      ))}
+                      {priceHistoryDetail.map((record, i) => {
+                        const prev = i > 0 ? priceHistoryDetail[i - 1] : null;
+                        const diff = prev ? record.price - prev.price : 0;
+                        const diffPct = prev && prev.price > 0 ? (diff / prev.price * 100) : 0;
+                        return (
+                          <tr key={i} className="border-b border-warm-100 hover:bg-warm-50 text-sm">
+                            <td className="py-2 px-3 text-brown-500">{record.date}</td>
+                            <td className="py-2 px-3">
+                              <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${sourceBadge[record.source]}`}>
+                                {sourceLabel[record.source]}
+                              </span>
+                            </td>
+                            <td className="py-2 px-3 text-right text-primary-600 font-medium">¥{record.price.toFixed(2)}</td>
+                            <td className="py-2 px-3 text-right">
+                              {prev ? (
+                                diff > 0 ? (
+                                  <span className="text-red-500 font-medium">↑ +¥{diff.toFixed(2)} (+{diffPct.toFixed(1)}%)</span>
+                                ) : diff < 0 ? (
+                                  <span className="text-green-600 font-medium">↓ ¥{diff.toFixed(2)} ({diffPct.toFixed(1)}%)</span>
+                                ) : (
+                                  <span className="text-brown-400">持平</span>
+                                )
+                              ) : (
+                                <span className="text-brown-300">初始</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
