@@ -16,12 +16,28 @@ export default function Profit() {
 
   const productProfits = useMemo(() => {
     return products.map(product => {
-      const profitData = calculateProductProfit(product, materials);
       const saleItem = todaySale?.items.find(item => item.productId === product.id);
+      const soldQuantity = saleItem?.quantity || 0;
+
+      let unitCost: number, unitProfit: number, profitMargin: number;
+
+      if (soldQuantity > 0 && saleItem) {
+        unitCost = saleItem.cost / soldQuantity;
+        unitProfit = saleItem.profit / soldQuantity;
+        profitMargin = saleItem.revenue > 0 ? (saleItem.profit / saleItem.revenue) * 100 : 0;
+      } else {
+        const profitData = calculateProductProfit(product, materials);
+        unitCost = profitData.cost;
+        unitProfit = profitData.profit;
+        profitMargin = profitData.profitMargin;
+      }
+
       return {
         ...product,
-        ...profitData,
-        soldQuantity: saleItem?.quantity || 0,
+        cost: unitCost,
+        profit: unitProfit,
+        profitMargin,
+        soldQuantity,
         totalProfit: saleItem?.profit || 0,
         totalRevenue: saleItem?.revenue || 0,
         totalCost: saleItem?.cost || 0,

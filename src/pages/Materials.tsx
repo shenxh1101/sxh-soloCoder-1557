@@ -55,8 +55,11 @@ export default function Materials() {
 
   const getPriceTrend = (material: typeof materials[0]) => {
     if (material.priceHistory.length < 2) return 'stable';
-    const recent = material.priceHistory[material.priceHistory.length - 1].price;
-    const previous = material.priceHistory[material.priceHistory.length - 2].price;
+    const sorted = [...material.priceHistory].sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+    );
+    const recent = sorted[sorted.length - 1].price;
+    const previous = sorted[sorted.length - 2].price;
     if (recent > previous) return 'up';
     if (recent < previous) return 'down';
     return 'stable';

@@ -5,6 +5,14 @@ import { seedMaterials, seedProducts } from '../data/seed';
 import { generateId, getWeekDates } from '../utils/date';
 import { calculateSaleItem, calculateTotalMaterialConsumption } from '../utils/calculator';
 
+const sortPriceHistory = (history: Material['priceHistory']) =>
+  [...history].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+const getLatestPrice = (history: Material['priceHistory']) => {
+  const sorted = sortPriceHistory(history);
+  return sorted.length > 0 ? sorted[sorted.length - 1].price : 0;
+};
+
 export const useStore = create<AppState>()(
   persist(
     (set, get) => ({
@@ -27,15 +35,15 @@ export const useStore = create<AppState>()(
 
       updateMaterialPrice: (id, newPrice, date) =>
         set((state) => ({
-          materials: state.materials.map((m) =>
-            m.id === id
-              ? {
-                  ...m,
-                  currentPrice: newPrice,
-                  priceHistory: [...m.priceHistory, { date, price: newPrice }],
-                }
-              : m
-          ),
+          materials: state.materials.map((m) => {
+            if (m.id !== id) return m;
+            const newHistory = sortPriceHistory([...m.priceHistory, { date, price: newPrice }]);
+            return {
+              ...m,
+              currentPrice: getLatestPrice(newHistory),
+              priceHistory: newHistory,
+            };
+          }),
         })),
 
       updateMaterialStock: (id, stock) =>
@@ -65,21 +73,22 @@ export const useStore = create<AppState>()(
         };
         set((state) => {
           const material = state.materials.find(m => m.id === purchase.materialId);
-          if (material) {
-            state.updateMaterialStock(
-              purchase.materialId,
-              material.stock + purchase.quantity
-            );
-            if (purchase.unitPrice !== material.currentPrice) {
-              state.updateMaterialPrice(
-                purchase.materialId,
-                purchase.unitPrice,
-                purchase.date
-              );
-            }
-          }
+          if (!material) return { purchases: [...state.purchases, newPurchase] };
+
+          const newStock = material.stock + purchase.quantity;
+          const newHistory = sortPriceHistory([
+            ...material.priceHistory,
+            { date: purchase.date, price: purchase.unitPrice },
+          ]);
+          const newCurrentPrice = getLatestPrice(newHistory);
+
           return {
             purchases: [...state.purchases, newPurchase],
+            materials: state.materials.map(m =>
+              m.id === purchase.materialId
+                ? { ...m, stock: newStock, currentPrice: newCurrentPrice, priceHistory: newHistory }
+                : m
+            ),
           };
         });
       },
@@ -87,17 +96,32 @@ export const useStore = create<AppState>()(
       deletePurchase: (id) =>
         set((state) => {
           const purchase = state.purchases.find(p => p.id === id);
-          if (purchase) {
-            const material = state.materials.find(m => m.id === purchase.materialId);
-            if (material) {
-              state.updateMaterialStock(
-                purchase.materialId,
-                Math.max(0, material.stock - purchase.quantity)
-              );
-            }
+          if (!purchase) return { purchases: state.purchases.filter(p => p.id !== id) };
+
+          const material = state.materials.find(m => m.id === purchase.materialId);
+          if (!material) return { purchases: state.purchases.filter(p => p.id !== id) };
+
+          const newStock = Math.max(0, material.stock - purchase.quantity);
+
+          const newHistory = [...material.priceHistory];
+          const entryIndex = newHistory.findIndex(
+            entry => entry.date === purchase.date && entry.price === purchase.unitPrice
+          );
+          if (entryIndex !== -1) {
+            newHistory.splice(entryIndex, 1);
           }
+          const sortedHistory = sortPriceHistory(newHistory);
+          const newCurrentPrice = sortedHistory.length > 0
+            ? sortedHistory[sortedHistory.length - 1].price
+            : material.currentPrice;
+
           return {
             purchases: state.purchases.filter(p => p.id !== id),
+            materials: state.materials.map(m =>
+              m.id === purchase.materialId
+                ? { ...m, stock: newStock, currentPrice: newCurrentPrice, priceHistory: sortedHistory }
+                : m
+            ),
           };
         }),
 
@@ -106,19 +130,17 @@ export const useStore = create<AppState>()(
         const items = saleData.items.map(item =>
           calculateSaleItem(item.productId, item.quantity, state.products, state.materials)
         );
-        
+
         const totalRevenue = items.reduce((sum, item) => sum + item.revenue, 0);
         const totalCost = items.reduce((sum, item) => sum + item.cost, 0);
         const grossProfit = totalRevenue - totalCost;
 
         const consumption = calculateTotalMaterialConsumption(items);
+        const materialUpdates = new Map<string, number>();
         consumption.forEach((quantity, materialId) => {
           const material = state.materials.find(m => m.id === materialId);
           if (material) {
-            state.updateMaterialStock(
-              materialId,
-              Math.max(0, material.stock - quantity)
-            );
+            materialUpdates.set(materialId, Math.max(0, material.stock - quantity));
           }
         });
 
@@ -134,26 +156,33 @@ export const useStore = create<AppState>()(
 
         set((state) => ({
           sales: [...state.sales, newSale],
+          materials: state.materials.map(m => {
+            const newStock = materialUpdates.get(m.id);
+            return newStock !== undefined ? { ...m, stock: newStock } : m;
+          }),
         }));
       },
 
       deleteSale: (id) =>
         set((state) => {
           const sale = state.sales.find(s => s.id === id);
-          if (sale) {
-            const consumption = calculateTotalMaterialConsumption(sale.items);
-            consumption.forEach((quantity, materialId) => {
-              const material = state.materials.find(m => m.id === materialId);
-              if (material) {
-                state.updateMaterialStock(
-                  materialId,
-                  material.stock + quantity
-                );
-              }
-            });
-          }
+          if (!sale) return { sales: state.sales.filter(s => s.id !== id) };
+
+          const consumption = calculateTotalMaterialConsumption(sale.items);
+          const materialUpdates = new Map<string, number>();
+          consumption.forEach((quantity, materialId) => {
+            const material = state.materials.find(m => m.id === materialId);
+            if (material) {
+              materialUpdates.set(materialId, material.stock + quantity);
+            }
+          });
+
           return {
             sales: state.sales.filter(s => s.id !== id),
+            materials: state.materials.map(m => {
+              const newStock = materialUpdates.get(m.id);
+              return newStock !== undefined ? { ...m, stock: newStock } : m;
+            }),
           };
         }),
 
@@ -171,7 +200,7 @@ export const useStore = create<AppState>()(
       getWeeklyData: () => {
         const weekDates = getWeekDates();
         const sales = get().sales;
-        
+
         return weekDates.map(date => {
           const daySales = sales.filter(s => s.date === date);
           const revenue = daySales.reduce((sum, s) => sum + s.totalRevenue, 0);
