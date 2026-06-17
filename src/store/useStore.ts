@@ -218,6 +218,20 @@ export const useStore = create<AppState>()(
     }),
     {
       name: 'breakfast-shop-storage',
+      version: 2,
+      migrate: (persistedState: unknown, version: number) => {
+        const state = persistedState as Record<string, any>;
+        if (version < 2 && state.materials) {
+          state.materials = state.materials.map((m: any) => ({
+            ...m,
+            priceHistory: (m.priceHistory || []).map((entry: any) => ({
+              ...entry,
+              source: entry.source || 'manual',
+            })),
+          }));
+        }
+        return state;
+      },
     }
   )
 );

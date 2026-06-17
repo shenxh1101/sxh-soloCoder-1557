@@ -3,7 +3,7 @@ import { useStore } from '../store';
 import { SALE_PERIOD_LABELS, SalePeriod } from '../store/types';
 import { calculateProductProfit } from '../utils/calculator';
 import { getToday, getRecentDates, getDateRange, getWeekDayName } from '../utils/date';
-import { Calendar, TrendingUp, TrendingDown, Award, BarChart3, PackageSearch, ChevronDown, ChevronUp, AlertCircle, Sparkles, Activity } from 'lucide-react';
+import { Calendar, TrendingUp, TrendingDown, Award, BarChart3, PackageSearch, ChevronDown, ChevronUp, AlertCircle, Sparkles, Activity, GitCompare, CheckCircle2, XCircle } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
   LineChart, Line, Legend, AreaChart, Area,
@@ -12,6 +12,8 @@ import {
 const PERIOD_ORDER: SalePeriod[] = ['morning', 'noon', 'evening'];
 const PERIOD_EMOJI: Record<SalePeriod, string> = { morning: '🌅', noon: '☀️', evening: '🌆' };
 const barColors = ['#FF8C42', '#FFB74D', '#FFD180', '#FFE0B2', '#FFECB3', '#FFF8E1'];
+
+const COMPARE_COLORS = ['#FF8C42', '#2196F3'];
 
 type ViewMode = 'day' | 'week' | 'product';
 type TimeRangeMode = '7d' | '30d' | 'custom';
@@ -26,6 +28,9 @@ export default function Profit() {
   const [customEnd, setCustomEnd] = useState(getToday());
 
   const [expandedPeriods, setExpandedPeriods] = useState<Set<string>>(new Set());
+
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareProductId, setCompareProductId] = useState<string>('');
 
   const materials = useStore(state => state.materials);
   const products = useStore(state => state.products);
@@ -55,6 +60,19 @@ export default function Profit() {
     });
     return { totalRevenue, totalCost, grossProfit, items: Array.from(allItems.values()) };
   }, [daySales]);
+
+  // 批次合计对账（批次加总之和 vs 当天总汇总）
+  const periodTotals = useMemo(() => {
+    if (!mergedDayData) return null;
+    const sumRevenue = daySales.reduce((s, x) => s + x.totalRevenue, 0);
+    const sumCost = daySales.reduce((s, x) => s + x.totalCost, 0);
+    const sumProfit = daySales.reduce((s, x) => s + x.grossProfit, 0);
+    const diffRevenue = Math.abs(sumRevenue - mergedDayData.totalRevenue);
+    const diffCost = Math.abs(sumCost - mergedDayData.totalCost);
+    const diffProfit = Math.abs(sumProfit - mergedDayData.grossProfit);
+    const balanced = diffRevenue < 0.01 && diffCost < 0.01 && diffProfit < 0.01;
+    return { sumRevenue, sumCost, sumProfit, balanced, diffRevenue, diffCost, diffProfit };
+  }, [daySales, mergedDayData]);
 
   const dayProductProfits = useMemo(() => {
     return products.map(product => {
@@ -104,13 +122,12 @@ export default function Profit() {
     return getDateRange(customStart, customEnd);
   }, [timeRangeMode, customStart, customEnd]);
 
-  const productTrendData = useMemo(() => {
-    const pid = selectedProductId || products[0]?.id;
+  const getProductTrendData = (pid: string) => {
     if (!pid) return [];
     const dateSet = new Set(productRangeDates);
     const sorted = [...sales].filter(s => dateSet.has(s.date)).sort((a, b) => a.date.localeCompare(b.date));
-    const dateMap = new Map<string, { quantity: number; revenue: number; cost: number; profit: number }>();
-    productRangeDates.forEach(d => dateMap.set(d, { quantity: 0, revenue: 0, cost: 0, profit: 0 }));
+    const dateMap = new Map<string, { quantity: number; revenue: number; cost: number; profit: number; margin: number }>();
+    productRangeDates.forEach(d => dateMap.set(d, { quantity: 0, revenue: 0, cost: 0, profit: 0, margin: 0 }));
     sorted.forEach(sale => {
       const item = sale.items.find(i => i.productId === pid);
       if (!item) return;
@@ -122,8 +139,81 @@ export default function Profit() {
         existing.profit += item.profit;
       }
     });
-    return Array.from(dateMap.entries()).map(([date, data]) => ({ date, ...data, weekday: getWeekDayName(date) }));
-  }, [sales, selectedProductId, products, productRangeDates]);
+    return Array.from(dateMap.entries()).map(([date, data]) => ({
+      date,
+      weekday: getWeekDayName(date),
+      ...data,
+      margin: data.revenue > 0 ? (data.profit / data.revenue) * 100 : 0,
+    }));
+  };
+
+  const mainProductId = selectedProductId || products[0]?.id || '';
+  const secondProductId = compareProductId || (products[1]?.id || '');
+
+  const productTrendData = useMemo(() => getProductTrendData(mainProductId), [mainProductId, productRangeDates, sales]);
+
+  const compareTrendData = useMemo(() => {
+    if (!compareMode || !secondProductId) return [];
+    return getProductTrendData(secondProductId);
+  }, [compareMode, secondProductId, productRangeDates, sales]);
+
+  // 合并两个产品的趋势（用于对比图）
+  const compareCombinedData = useMemo(() => {
+    if (!compareMode || !secondProductId) return [];
+    const data1 = productTrendData;
+    const data2 = compareTrendData;
+    const p1 = products.find(p => p.id === mainProductId);
+    const p2 = products.find(p => p.id === secondProductId);
+    return data1.map((d1, i) => {
+      const d2 = data2[i];
+      return {
+        date: d1.date,
+        [`${p1?.name || '产品1'}_销量`]: d1.quantity,
+        [`${p1?.name || '产品1'}_利润`]: d1.profit,
+        [`${p1?.name || '产品1'}_毛利率`]: d1.margin,
+        [`${p2?.name || '产品2'}_销量`]: d2?.quantity || 0,
+        [`${p2?.name || '产品2'}_利润`]: d2?.profit || 0,
+        [`${p2?.name || '产品2'}_毛利率`]: d2?.margin || 0,
+      };
+    });
+  }, [compareMode, mainProductId, secondProductId, productTrendData, compareTrendData, products]);
+
+  // 对比结论
+  const compareConclusion = useMemo(() => {
+    if (!compareMode || !secondProductId || productTrendData.length === 0) return null;
+    const p1 = products.find(p => p.id === mainProductId)!;
+    const p2 = products.find(p => p.id === secondProductId)!;
+    const d1 = productTrendData;
+    const d2 = compareTrendData;
+
+    const totalQty1 = d1.reduce((s, d) => s + d.quantity, 0);
+    const totalQty2 = d2.reduce((s, d) => s + d.quantity, 0);
+    const totalProfit1 = d1.reduce((s, d) => s + d.profit, 0);
+    const totalProfit2 = d2.reduce((s, d) => s + d.profit, 0);
+
+    const avgMargin1 = totalQty1 > 0 ? (totalProfit1 / d1.reduce((s, d) => s + d.revenue, 0)) * 100 : 0;
+    const avgMargin2 = totalQty2 > 0 ? (totalProfit2 / d2.reduce((s, d) => s + d.revenue, 0)) * 100 : 0;
+
+    // 稳定性：按销量波动系数
+    const qtyArr1 = d1.map(d => d.quantity);
+    const qtyArr2 = d2.map(d => d.quantity);
+    const cv1 = calcCv(qtyArr1);
+    const cv2 = calcCv(qtyArr2);
+
+    const moreProfitable = totalProfit1 > totalProfit2 ? p1 : p2;
+    const higherMargin = avgMargin1 > avgMargin2 ? p1 : p2;
+    const moreStable = cv1 < cv2 ? p1 : p2;
+    const moreSales = totalQty1 > totalQty2 ? p1 : p2;
+
+    return {
+      p1: { name: p1.name, emoji: p1.emoji, totalQty: totalQty1, totalProfit: totalProfit1, avgMargin: avgMargin1, cv: cv1 },
+      p2: { name: p2.name, emoji: p2.emoji, totalQty: totalQty2, totalProfit: totalProfit2, avgMargin: avgMargin2, cv: cv2 },
+      moreProfitable,
+      higherMargin,
+      moreStable,
+      moreSales,
+    };
+  }, [compareMode, mainProductId, secondProductId, productTrendData, compareTrendData, products]);
 
   const productVolatilityDays = useMemo(() => {
     if (productTrendData.length < 3) return [];
@@ -222,7 +312,14 @@ export default function Profit() {
                     <span className="text-sm text-green-700">销售额</span>
                   </div>
                   <p className="text-3xl font-bold text-green-700">¥{mergedDayData.totalRevenue.toFixed(2)}</p>
-                  <p className="text-xs text-green-600 mt-1">{daySales.length} 批次</p>
+                  {periodTotals && (
+                    <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
+                      {periodTotals.balanced
+                        ? <><CheckCircle2 className="w-3.5 h-3.5" /> 批次合计一致</>
+                        : <><XCircle className="w-3.5 h-3.5" /> 差¥{periodTotals.diffRevenue.toFixed(2)}</>
+                      }
+                    </p>
+                  )}
                 </div>
                 <div className="stat-card animate-fadeInUp bg-gradient-to-br from-orange-50 to-orange-100">
                   <div className="flex items-center justify-between mb-4">
@@ -230,6 +327,11 @@ export default function Profit() {
                     <span className="text-sm text-orange-700">原料成本</span>
                   </div>
                   <p className="text-3xl font-bold text-orange-700">¥{mergedDayData.totalCost.toFixed(2)}</p>
+                  {periodTotals && (
+                    <p className="text-xs text-orange-600 mt-1">
+                      批次合计 ¥{periodTotals.sumCost.toFixed(2)}
+                    </p>
+                  )}
                 </div>
                 <div className="stat-card animate-fadeInUp bg-gradient-to-br from-primary-50 to-primary-100">
                   <div className="flex items-center justify-between mb-4">
@@ -237,6 +339,11 @@ export default function Profit() {
                     <span className="text-sm text-primary-700">毛利</span>
                   </div>
                   <p className="text-3xl font-bold text-primary-700">¥{mergedDayData.grossProfit.toFixed(2)}</p>
+                  {periodTotals && (
+                    <p className="text-xs text-primary-600 mt-1">
+                      批次合计 ¥{periodTotals.sumProfit.toFixed(2)}
+                    </p>
+                  )}
                 </div>
                 <div className="stat-card animate-fadeInUp bg-gradient-to-br from-purple-50 to-purple-100">
                   <div className="flex items-center justify-between mb-4">
@@ -246,6 +353,7 @@ export default function Profit() {
                   <p className="text-3xl font-bold text-purple-700">
                     {mergedDayData.totalRevenue > 0 ? (mergedDayData.grossProfit / mergedDayData.totalRevenue * 100).toFixed(1) : '0.0'}%
                   </p>
+                  <p className="text-xs text-purple-600 mt-1">{daySales.length} 批次销售</p>
                 </div>
               </div>
 
@@ -273,6 +381,7 @@ export default function Profit() {
                 <div className="space-y-4">
                   {daySales.sort((a, b) => PERIOD_ORDER.indexOf(a.period) - PERIOD_ORDER.indexOf(b.period)).map(sale => {
                     const isExpanded = expandedPeriods.has(sale.id);
+                    const itemCount = sale.items.filter(i => i.quantity > 0).length;
                     return (
                       <div key={sale.id} className="card animate-fadeInUp bg-gradient-to-br from-warm-50 to-white overflow-hidden">
                         <button
@@ -283,6 +392,7 @@ export default function Profit() {
                             <div className="flex items-center gap-2 mb-2">
                               <span className="text-xl">{PERIOD_EMOJI[sale.period]}</span>
                               <h4 className="font-bold text-brown-500">{SALE_PERIOD_LABELS[sale.period]}</h4>
+                              <span className="text-xs text-brown-400 bg-warm-100 px-2 py-0.5 rounded-full">{itemCount} 种产品</span>
                               {isExpanded ? <ChevronUp className="w-4 h-4 text-brown-400 ml-2" /> : <ChevronDown className="w-4 h-4 text-brown-400 ml-2" />}
                             </div>
                             <div className="grid grid-cols-3 gap-2 text-center">
@@ -308,7 +418,7 @@ export default function Profit() {
                                 {sale.items.filter(i => i.quantity > 0).map(item => {
                                   const product = products.find(p => p.id === item.productId);
                                   return (
-                                    <tr key={item.productId} className="border-b border-warm-100 last:border-0 text-sm">
+                                    <tr key={item.productId} className="border-b border-warm-100 text-sm">
                                       <td className="py-2"><span className="flex items-center gap-1"><span>{product?.emoji}</span><span className="text-brown-500 font-medium">{product?.name}</span></span></td>
                                       <td className="py-2 text-right text-brown-500">{item.quantity}份</td>
                                       <td className="py-2 text-right text-green-600">¥{item.revenue.toFixed(2)}</td>
@@ -317,6 +427,15 @@ export default function Profit() {
                                     </tr>
                                   );
                                 })}
+                                <tr className="bg-primary-50 font-bold text-sm">
+                                  <td className="py-2.5 text-primary-700">小计</td>
+                                  <td className="py-2.5 text-right text-brown-600">
+                                    {sale.items.reduce((s, i) => s + i.quantity, 0)} 份
+                                  </td>
+                                  <td className="py-2.5 text-right text-green-700">¥{sale.totalRevenue.toFixed(2)}</td>
+                                  <td className="py-2.5 text-right text-orange-700">¥{sale.totalCost.toFixed(2)}</td>
+                                  <td className="py-2.5 text-right text-primary-700">¥{sale.grossProfit.toFixed(2)}</td>
+                                </tr>
                               </tbody>
                             </table>
                           </div>
@@ -474,6 +593,20 @@ export default function Profit() {
                 <h3 className="text-lg font-bold text-brown-500">选择产品查看趋势</h3>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={() => {
+                    setCompareMode(!compareMode);
+                    if (!compareMode && !compareProductId && products[1]) {
+                      setCompareProductId(products[1].id);
+                    }
+                  }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                    compareMode ? 'bg-purple-500 text-white shadow-sm' : 'bg-warm-100 text-brown-500 hover:bg-warm-200'
+                  }`}
+                >
+                  <GitCompare className="w-4 h-4" />
+                  对比模式
+                </button>
                 <div className="flex bg-warm-100 rounded-lg p-1">
                   {([['7d', '最近7天'], ['30d', '最近30天'], ['custom', '自定义']] as [TimeRangeMode, string][]).map(([mode, label]) => (
                     <button
@@ -496,52 +629,170 @@ export default function Profit() {
                 )}
               </div>
             </div>
-            <div className="flex flex-wrap gap-2">
-              {products.map(product => (
-                <button
-                  key={product.id}
-                  onClick={() => setSelectedProductId(product.id)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-xl font-medium transition-all ${
-                    selectedProductId === product.id
-                      ? 'bg-primary-500 text-white shadow-lg'
-                      : 'bg-warm-100 text-brown-500 hover:bg-warm-200'
-                  }`}
-                >
-                  <span>{product.emoji}</span> {product.name}
-                </button>
-              ))}
+            <div className="space-y-2">
+              <div className="flex flex-wrap gap-2">
+                {products.map(product => (
+                  <button
+                    key={product.id}
+                    onClick={() => setSelectedProductId(product.id)}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-xl font-medium transition-all ${
+                      selectedProductId === product.id || (!selectedProductId && product.id === products[0]?.id)
+                        ? 'bg-primary-500 text-white shadow-lg'
+                        : 'bg-warm-100 text-brown-500 hover:bg-warm-200'
+                    }`}
+                  >
+                    <span>{product.emoji}</span> {product.name}
+                  </button>
+                ))}
+              </div>
+              {compareMode && (
+                <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-warm-200">
+                  <span className="text-sm text-brown-400 font-medium">对比产品:</span>
+                  {products.filter(p => p.id !== mainProductId).map(product => (
+                    <button
+                      key={product.id}
+                      onClick={() => setCompareProductId(product.id)}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                        compareProductId === product.id
+                          ? 'bg-blue-500 text-white shadow'
+                          : 'bg-warm-100 text-brown-500 hover:bg-warm-200'
+                      }`}
+                    >
+                      <span>{product.emoji}</span> {product.name}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
-          {productTrendData.length > 0 && (
-            <div className="card animate-fadeInUp">
-              <h3 className="text-lg font-bold text-brown-500 mb-4">
-                {products.find(p => p.id === (selectedProductId || products[0]?.id))?.emoji}{' '}
-                {products.find(p => p.id === (selectedProductId || products[0]?.id))?.name} 经营趋势
-              </h3>
-              <div className="h-96">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={productTrendData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#FFE8CC" />
-                    <XAxis dataKey="date" stroke="#8D6E63" fontSize={11} />
-                    <YAxis yAxisId="left" stroke="#8D6E63" fontSize={11} />
-                    <YAxis yAxisId="right" orientation="right" stroke="#8D6E63" fontSize={11} />
-                    <Tooltip contentStyle={{ backgroundColor: '#FFF7F0', border: '2px solid #FFB784', borderRadius: '12px' }} formatter={(value: number, name: string) => {
-                      if (name === '销量') return [`${value} 份`, name];
-                      return [`¥${value.toFixed(2)}`, name];
-                    }} />
-                    <Legend />
-                    <Line yAxisId="right" type="monotone" dataKey="quantity" name="销量" stroke="#4CAF50" strokeWidth={2} dot={{ r: 4 }} />
-                    <Line yAxisId="left" type="monotone" dataKey="revenue" name="收入" stroke="#2196F3" strokeWidth={2} dot={{ r: 4 }} />
-                    <Line yAxisId="left" type="monotone" dataKey="cost" name="成本" stroke="#FF9800" strokeWidth={2} dot={{ r: 4 }} strokeDasharray="3 3" />
-                    <Line yAxisId="left" type="monotone" dataKey="profit" name="利润" stroke="#FF8C42" strokeWidth={2.5} dot={{ r: 5, strokeWidth: 2 }} />
-                  </LineChart>
-                </ResponsiveContainer>
+          {compareMode && compareCombinedData.length > 0 && compareConclusion ? (
+            <>
+              <div className="card animate-fadeInUp">
+                <h3 className="text-lg font-bold text-brown-500 mb-4 flex items-center gap-2">
+                  <GitCompare className="w-5 h-5 text-purple-500" />
+                  产品对比：{compareConclusion.p1.emoji}{compareConclusion.p1.name} vs {compareConclusion.p2.emoji}{compareConclusion.p2.name}
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <h4 className="text-sm font-bold text-brown-600 mb-2">销量趋势</h4>
+                    <div className="h-56">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={compareCombinedData}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#FFE8CC" />
+                          <XAxis dataKey="date" stroke="#8D6E63" fontSize={10} />
+                          <YAxis stroke="#8D6E63" fontSize={10} />
+                          <Tooltip contentStyle={{ backgroundColor: '#FFF7F0', border: '2px solid #FFB784', borderRadius: '10px', fontSize: 12 }} />
+                          <Legend wrapperStyle={{ fontSize: 11 }} />
+                          <Line type="monotone" dataKey={`${compareConclusion.p1.name}_销量`} name={compareConclusion.p1.name} stroke={COMPARE_COLORS[0]} strokeWidth={2} dot={{ r: 3 }} />
+                          <Line type="monotone" dataKey={`${compareConclusion.p2.name}_销量`} name={compareConclusion.p2.name} stroke={COMPARE_COLORS[1]} strokeWidth={2} dot={{ r: 3 }} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-brown-600 mb-2">利润趋势</h4>
+                    <div className="h-56">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={compareCombinedData}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#FFE8CC" />
+                          <XAxis dataKey="date" stroke="#8D6E63" fontSize={10} />
+                          <YAxis stroke="#8D6E63" fontSize={10} />
+                          <Tooltip formatter={(v: number) => [`¥${v.toFixed(2)}`, '']} contentStyle={{ backgroundColor: '#FFF7F0', border: '2px solid #FFB784', borderRadius: '10px', fontSize: 12 }} />
+                          <Legend wrapperStyle={{ fontSize: 11 }} />
+                          <Line type="monotone" dataKey={`${compareConclusion.p1.name}_利润`} name={compareConclusion.p1.name} stroke={COMPARE_COLORS[0]} strokeWidth={2} dot={{ r: 3 }} />
+                          <Line type="monotone" dataKey={`${compareConclusion.p2.name}_利润`} name={compareConclusion.p2.name} stroke={COMPARE_COLORS[1]} strokeWidth={2} dot={{ r: 3 }} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-brown-600 mb-2">毛利率趋势</h4>
+                    <div className="h-56">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={compareCombinedData}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#FFE8CC" />
+                          <XAxis dataKey="date" stroke="#8D6E63" fontSize={10} />
+                          <YAxis stroke="#8D6E63" fontSize={10} unit="%" />
+                          <Tooltip formatter={(v: number) => [`${v.toFixed(1)}%`, '']} contentStyle={{ backgroundColor: '#FFF7F0', border: '2px solid #FFB784', borderRadius: '10px', fontSize: 12 }} />
+                          <Legend wrapperStyle={{ fontSize: 11 }} />
+                          <Line type="monotone" dataKey={`${compareConclusion.p1.name}_毛利率`} name={compareConclusion.p1.name} stroke={COMPARE_COLORS[0]} strokeWidth={2} dot={{ r: 3 }} />
+                          <Line type="monotone" dataKey={`${compareConclusion.p2.name}_毛利率`} name={compareConclusion.p2.name} stroke={COMPARE_COLORS[1]} strokeWidth={2} dot={{ r: 3 }} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                </div>
               </div>
-            </div>
+
+              <div className="card animate-fadeInUp bg-gradient-to-r from-purple-50 to-blue-50 border-purple-200">
+                <h3 className="text-lg font-bold text-brown-600 mb-4 flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-purple-500" />
+                  对比结论
+                </h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="bg-white rounded-xl p-4 border border-purple-100">
+                    <p className="text-xs text-brown-400 mb-1">💰 更赚钱</p>
+                    <p className="font-bold text-brown-600 text-lg">{compareConclusion.moreProfitable.emoji} {compareConclusion.moreProfitable.name}</p>
+                    <p className="text-xs text-brown-400 mt-1">
+                      多赚 ¥{Math.abs(compareConclusion.p1.totalProfit - compareConclusion.p2.totalProfit).toFixed(2)}
+                    </p>
+                  </div>
+                  <div className="bg-white rounded-xl p-4 border border-purple-100">
+                    <p className="text-xs text-brown-400 mb-1">📦 销量更高</p>
+                    <p className="font-bold text-brown-600 text-lg">{compareConclusion.moreSales.emoji} {compareConclusion.moreSales.name}</p>
+                    <p className="text-xs text-brown-400 mt-1">
+                      多卖 {Math.abs(compareConclusion.p1.totalQty - compareConclusion.p2.totalQty).toFixed(0)} 份
+                    </p>
+                  </div>
+                  <div className="bg-white rounded-xl p-4 border border-purple-100">
+                    <p className="text-xs text-brown-400 mb-1">📈 毛利率更高</p>
+                    <p className="font-bold text-brown-600 text-lg">{compareConclusion.higherMargin.emoji} {compareConclusion.higherMargin.name}</p>
+                    <p className="text-xs text-brown-400 mt-1">
+                      高 {Math.abs(compareConclusion.p1.avgMargin - compareConclusion.p2.avgMargin).toFixed(1)} 个百分点
+                    </p>
+                  </div>
+                  <div className="bg-white rounded-xl p-4 border border-purple-100">
+                    <p className="text-xs text-brown-400 mb-1">🛡️ 销量更稳</p>
+                    <p className="font-bold text-brown-600 text-lg">{compareConclusion.moreStable.emoji} {compareConclusion.moreStable.name}</p>
+                    <p className="text-xs text-brown-400 mt-1">
+                      波动系数 {(compareConclusion.moreStable.name === compareConclusion.p1.name ? compareConclusion.p1.cv : compareConclusion.p2.cv) * 100}%
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : (
+            productTrendData.length > 0 && (
+              <div className="card animate-fadeInUp">
+                <h3 className="text-lg font-bold text-brown-500 mb-4">
+                  {products.find(p => p.id === mainProductId)?.emoji}{' '}
+                  {products.find(p => p.id === mainProductId)?.name} 经营趋势
+                </h3>
+                <div className="h-96">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={productTrendData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#FFE8CC" />
+                      <XAxis dataKey="date" stroke="#8D6E63" fontSize={11} />
+                      <YAxis yAxisId="left" stroke="#8D6E63" fontSize={11} />
+                      <YAxis yAxisId="right" orientation="right" stroke="#8D6E63" fontSize={11} />
+                      <Tooltip contentStyle={{ backgroundColor: '#FFF7F0', border: '2px solid #FFB784', borderRadius: '12px' }} formatter={(value: number, name: string) => {
+                        if (name === '销量') return [`${value} 份`, name];
+                        return [`¥${value.toFixed(2)}`, name];
+                      }} />
+                      <Legend />
+                      <Line yAxisId="right" type="monotone" dataKey="quantity" name="销量" stroke="#4CAF50" strokeWidth={2} dot={{ r: 4 }} />
+                      <Line yAxisId="left" type="monotone" dataKey="revenue" name="收入" stroke="#2196F3" strokeWidth={2} dot={{ r: 4 }} />
+                      <Line yAxisId="left" type="monotone" dataKey="cost" name="成本" stroke="#FF9800" strokeWidth={2} dot={{ r: 4 }} strokeDasharray="3 3" />
+                      <Line yAxisId="left" type="monotone" dataKey="profit" name="利润" stroke="#FF8C42" strokeWidth={2.5} dot={{ r: 5, strokeWidth: 2 }} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )
           )}
 
-          {productVolatilityDays.length > 0 && (
+          {!compareMode && productVolatilityDays.length > 0 && (
             <div className="card animate-fadeInUp bg-gradient-to-r from-yellow-50 to-orange-50 border-yellow-200">
               <div className="flex items-center gap-2 mb-3">
                 <Activity className="w-5 h-5 text-yellow-600" />
@@ -571,7 +822,9 @@ export default function Profit() {
           )}
 
           <div className="card animate-fadeInUp">
-            <h3 className="text-lg font-bold text-brown-500 mb-4">全部产品经营对比 ({timeRangeMode === '7d' ? '最近7天' : timeRangeMode === '30d' ? '最近30天' : `${customStart} ~ ${customEnd}`})</h3>
+            <h3 className="text-lg font-bold text-brown-500 mb-4">
+              全部产品经营对比 ({timeRangeMode === '7d' ? '最近7天' : timeRangeMode === '30d' ? '最近30天' : `${customStart} ~ ${customEnd}`})
+            </h3>
             <div className="h-80">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={productSummary.map(p => ({ name: p.name, emoji: p.emoji, revenue: p.totalRevenue, cost: p.totalCost, profit: p.totalProfit }))}>
@@ -633,4 +886,12 @@ export default function Profit() {
       )}
     </div>
   );
+}
+
+function calcCv(arr: number[]): number {
+  if (arr.length === 0) return 0;
+  const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+  if (mean === 0) return 0;
+  const variance = arr.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / arr.length;
+  return Math.sqrt(variance) / mean;
 }
